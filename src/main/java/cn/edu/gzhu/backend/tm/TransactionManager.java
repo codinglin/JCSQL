@@ -1,5 +1,8 @@
 package cn.edu.gzhu.backend.tm;
 
+/**
+ * 
+ */
 public interface TransactionManager {
     // 开启一个新事物
     long begin();
