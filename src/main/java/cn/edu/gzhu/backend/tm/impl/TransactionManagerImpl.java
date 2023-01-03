@@ -14,7 +14,7 @@ import java.util.concurrent.locks.ReentrantLock;
 
 public class TransactionManagerImpl implements TransactionManager {
     // XID文件头长度
-    static final int LEN_XID_HEADER_LENGTH = 8;
+    public static final int LEN_XID_HEADER_LENGTH = 8;
     // 每个事务的占用长度
     private static final int XID_FIELD_SIZE = 1;
 
@@ -33,7 +33,7 @@ public class TransactionManagerImpl implements TransactionManager {
     private long xidCounter;
     private Lock counterLock;
 
-    TransactionManagerImpl(RandomAccessFile raf, FileChannel fc){
+    public TransactionManagerImpl(RandomAccessFile raf, FileChannel fc){
         this.file = raf;
         this.fc = fc;
         counterLock = new ReentrantLock();
