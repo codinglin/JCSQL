@@ -86,7 +86,19 @@ public class PageCacheImpl extends AbstractCache<Page> implements PageCache {
     }
 
     private void flush(Page page) {
-        
+        int pageNum = page.getPageNumber();
+        long offset = pageOffset(pageNum);
+        fileLock.lock();
+        try{
+            ByteBuffer buf = ByteBuffer.wrap(page.getData());
+            fc.position(offset);
+            fc.write(buf);
+            fc.force(false);
+        } catch (IOException e){
+            Panic.panic(e);
+        } finally {
+            fileLock.unlock();
+        }
     }
 
     @Override
@@ -96,7 +108,13 @@ public class PageCacheImpl extends AbstractCache<Page> implements PageCache {
 
     @Override
     public void close() {
-
+        super.close();
+        try {
+            fc.close();
+            file.close();
+        } catch (IOException e){
+            Panic.panic(e);
+        }
     }
 
     @Override
@@ -106,12 +124,18 @@ public class PageCacheImpl extends AbstractCache<Page> implements PageCache {
 
     @Override
     public void truncateByPageNum(int maxPageNum) {
-
+        long size = pageOffset(maxPageNum + 1);
+        try {
+            file.setLength(size);
+        } catch (IOException e){
+            Panic.panic(e);
+        }
+        pageNumbers.set(maxPageNum);
     }
 
     @Override
     public int getPageNumber() {
-        return 0;
+        return pageNumbers.intValue();
     }
 
     @Override
