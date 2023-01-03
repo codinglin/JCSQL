@@ -1,7 +1,15 @@
 package cn.edu.gzhu.backend.tm;
 
+import cn.edu.gzhu.backend.tm.impl.TransactionManagerImpl;
+
+import java.io.File;
+
 /**
- * 
+ * 每个事务都有一个XID，这个 ID 唯一标识了这个事务。事务的 XID 从 1 开始标号，并自增，不可重复。
+ * 并特殊规定 XID 0 是一个超级事务（Super Transaction）。
+ * 当一些操作在没有申请事务的情况下进行，那么可以将操作的 XID 设置为 0。XID 为 0 的事务的状态永远是 committed。
+ *
+ * 每个事务都有下面三种状态：1.active，正在进行，尚未结束。 2.committed，已提交。 3.aborted，已撤销（回滚）。
  */
 public interface TransactionManager {
     // 开启一个新事物
@@ -18,4 +26,10 @@ public interface TransactionManager {
     boolean isAborted(long xid);
     // 关闭TM
     void close();
+
+    public static TransactionManagerImpl create(String path){
+        File file = new File(path + TransactionManagerImpl.XID_SUFFIX);
+
+        return null;
+    }
 }

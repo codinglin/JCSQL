@@ -26,7 +26,7 @@ public class TransactionManagerImpl implements TransactionManager {
     // 超级事务，永远为committed状态
     public static final long SUPER_XID = 0;
 
-    static final String XID_SUFFIX = ".xid";
+    public static final String XID_SUFFIX = ".xid";
 
     private RandomAccessFile file;
     private FileChannel fc;
@@ -68,10 +68,49 @@ public class TransactionManagerImpl implements TransactionManager {
         }
     }
 
+    // 根据事务 xid 取得其在 xid 文件中对应的位置
     private long getXidPosition(long xid) {
         return LEN_XID_HEADER_LENGTH + (xid - 1) * XID_FIELD_SIZE;
     }
 
+
+    // 将 xid 加一，并更新 XID Header
+    private void IncreaseXIDCounter() {
+        xidCounter ++;
+        ByteBuffer buf = ByteBuffer.wrap(Parser.long2Byte(xidCounter));
+        try {
+            fc.position();
+            fc.write(buf);
+        } catch (IOException e){
+            Panic.panic(e);
+        }
+        try {
+            fc.force(false);
+        } catch (IOException e){
+            Panic.panic(e);
+        }
+    }
+
+    // 更新 xid 事务的状态为 status
+    private void updateXID(long xid, byte status) {
+        long offset = getXidPosition(xid);
+        byte[] tmp = new byte[XID_FIELD_SIZE];
+        tmp[0] = status;
+        ByteBuffer buf = ByteBuffer.wrap(tmp);
+        try {
+            fc.position(offset);
+            fc.write(buf);
+        } catch (IOException e) {
+            Panic.panic(e);
+        }
+        try {
+            fc.force(false);
+        } catch (IOException e) {
+            Panic.panic(e);
+        }
+    }
+
+    // 开始一个事务，并返回 XID
     @Override
     public long begin() {
         counterLock.lock();
@@ -85,42 +124,62 @@ public class TransactionManagerImpl implements TransactionManager {
         }
     }
 
-    private void IncreaseXIDCounter() {
-
-    }
-
-    private void updateXID(long xid, byte status) {
-        long offset = getXidPosition(xid);
-        byte[] tmp = new byte[XID_FIELD_SIZE];
-    }
-
+    // 提交 XID 事务
     @Override
     public void commit(long xid) {
-
+        updateXID(xid, FIELD_TRAN_COMMITTED);
     }
 
+    // 回滚 XID 事务
     @Override
     public void abort(long xid) {
+        updateXID(xid, FIELD_TRAN_ABORTED);
+    }
 
+    // 检查 XID 事务是否处于 status 状态
+    private boolean checkXID(long xid, byte status){
+        long offset = getXidPosition(xid);
+        ByteBuffer buf = ByteBuffer.wrap(new byte[XID_FIELD_SIZE]);
+        try {
+            fc.position(offset);
+            fc.read(buf);
+        } catch (IOException e) {
+            Panic.panic(e);
+        }
+        return buf.array()[0] == status;
     }
 
     @Override
     public boolean isActive(long xid) {
-        return false;
+        if(xid == SUPER_XID){
+            return false;
+        }
+        return checkXID(xid, FIELD_TRAN_ACTIVE);
     }
 
     @Override
     public boolean isCommitted(long xid) {
-        return false;
+        if(xid == SUPER_XID){
+            return true;
+        }
+        return checkXID(xid, FIELD_TRAN_COMMITTED);
     }
 
     @Override
     public boolean isAborted(long xid) {
-        return false;
+        if(xid == SUPER_XID){
+            return false;
+        }
+        return checkXID(xid, FIELD_TRAN_ABORTED);
     }
 
     @Override
     public void close() {
-
+        try {
+            fc.close();
+            file.close();
+        } catch (IOException e) {
+            Panic.panic(e);
+        }
     }
 }
