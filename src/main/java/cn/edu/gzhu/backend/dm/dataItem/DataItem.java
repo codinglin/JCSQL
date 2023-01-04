@@ -1,10 +1,14 @@
 package cn.edu.gzhu.backend.dm.dataItem;
 
 import cn.edu.gzhu.backend.common.SubArray;
+import cn.edu.gzhu.backend.dm.DataManagerImpl;
 import cn.edu.gzhu.backend.dm.dataItem.impl.DataItemImpl;
 import cn.edu.gzhu.backend.dm.page.Page;
 import cn.edu.gzhu.backend.utils.Parser;
+import cn.edu.gzhu.backend.utils.Types;
 import com.google.common.primitives.Bytes;
+
+import java.util.Arrays;
 
 public interface DataItem {
     SubArray data();
@@ -40,7 +44,13 @@ public interface DataItem {
     }
 
     // 从页面的 offset 处解析出 dataItem
-//    public static DataItem parserDataItem(Page page, short offset, DataManagetI)
+    public static DataItem parserDataItem(Page page, short offset, DataManagerImpl dataManager){
+        byte[] raw = page.getData();
+        short size = Parser.parseShort(Arrays.copyOfRange(raw, offset+DataItemImpl.OF_SIZE, offset+DataItemImpl.OF_DATA));
+        short length = (short)(size + DataItemImpl.OF_DATA);
+        long uid = Types.addressToUid(page.getPageNumber(), offset);
+        return new DataItemImpl(new SubArray(raw, offset, offset+length), new byte[length], page, uid, dataManager);
+    }
 
     public static void setDataItemRawInvalid(byte[] raw){
         raw[DataItemImpl.OF_VALID] = (byte) 1;
