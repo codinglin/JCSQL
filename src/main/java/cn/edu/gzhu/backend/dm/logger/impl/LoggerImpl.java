@@ -59,7 +59,7 @@ public class LoggerImpl implements Logger {
         lock = new ReentrantLock();
     }
 
-    private void init(){
+    public void init(){
         long size = 0;
         try {
             size = file.length();
