@@ -48,3 +48,8 @@ initPageOne() 和 启动时候进行校验：loadCheckPageOne()
 4. 修改数据就是先读取数据，然后修改DataItem内容，再插入DataItem数据。但是在修改数据操作的前后需要调用DataItemImp.after()进行解写锁并记录更新日志，这里需要依赖DataManager里面的logDataItem(long xid, DataItem di)方法；
 5. 释放缓存：
 释放DataItem的缓存，实质上就是释放DataItem所在页的PageCache缓存
+
+## VM 解析：
+DM 层向上层提供了数据项（Data Item）的概念，VM 通过管理所有的数据项，向上层提供了记录（Entry）的概念。
+
+上层模块通过 VM 操作数据的最小单位，就是记录。VM 则在其内部，为每个记录，维护了多个版本（Version）。每当上层模块对某个记录进行修改时，VM 就会为这个记录创建一个新的版本。
