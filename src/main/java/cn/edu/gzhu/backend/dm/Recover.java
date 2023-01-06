@@ -14,6 +14,15 @@ import org.checkerframework.checker.units.qual.A;
 
 import java.util.*;
 
+/**
+ * 在进行 插入和更新 操作之前，必须先进行对于的日志操作，在保证日志写入磁盘后，才进行数据操作。
+ * 这个日志策略，使得 DM 对于数据操作的磁盘同步，可以更加随意。
+ * 日志在操作数据之前，保证到达了磁盘，那么即使该数据操作最后没有来得及同步到磁盘，数据库就发生了崩溃，后续也可以通过磁盘上的日志恢复该数据。
+ *
+ * 为了保证数据的可恢复，VM 层传递到 DM 的操作序列需要满足以下两个规则：
+ *  规定 1：正在进行的事务，不会读取其他任何未提交的事务产生的数据。
+ *  规定 2：正在进行的事务，不会修改其他任何未提交的事务修改或产生的数据。
+ */
 public class Recover {
     private static final byte LOG_TYPE_INSERT = 0;
     private static final byte LOG_TYPE_UPDATE = 1;
