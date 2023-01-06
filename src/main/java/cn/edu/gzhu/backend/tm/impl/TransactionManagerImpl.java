@@ -79,12 +79,13 @@ public class TransactionManagerImpl implements TransactionManager {
         xidCounter ++;
         ByteBuffer buf = ByteBuffer.wrap(Parser.long2Byte(xidCounter));
         try {
-            fc.position();
+            fc.position(0);
             fc.write(buf);
         } catch (IOException e){
             Panic.panic(e);
         }
         try {
+            // 将数据刷到磁盘，但不包括元数据
             fc.force(false);
         } catch (IOException e){
             Panic.panic(e);

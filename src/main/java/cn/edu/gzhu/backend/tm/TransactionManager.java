@@ -68,7 +68,6 @@ public interface TransactionManager {
     }
 
     public static TransactionManagerImpl open(String path){
-        File file = new File(path + TransactionManagerImpl.XID_SUFFIX);
         File f = new File(path+TransactionManagerImpl.XID_SUFFIX);
         if(!f.exists()) {
             Panic.panic(Error.FileNotExistsException);
