@@ -17,6 +17,20 @@
 4. IM 实现了基于 B+ 树的索引，BTW，目前 where 只支持已索引字段。
 5. TBM 实现了对字段和表的管理。同时，解析 SQL 语句，并根据语句操作表。
 
+## 各个模块提供的操作
+1. DM：insert(x), update(x), read(x).
+DM 提供针对数据项(DataItem)的基本插入，更新与读取操作，且这些操作是原子性的。DM会直接对数据库文件进行读写。
+2. TM：begin(T), commit(T), abort(T), isActive(T), isCommitted(T), isAborted(T)。
+TM 提供了针对事务的开始，提交，回滚操作，同时提供了对事务状态的查询操作。
+3. VM：insert(X), update(X), read(X), delete(X)。
+VM 提供了针对记录(Entry)的增删改查操作，VM在内部为每条记录维护多个版本，并根据不同的事务，返回不同的版本。
+VM 对这些实现，是建立在 DM 和 TM 的各个操作上的，还有一个事务可见性类 Visibility。
+4. TBM：execute(statement)
+TBM 就是非常高层的模块，能直接执行用户输入的语句(statement)，然后进行执行。
+TBM 对语句的执行时建立在 VM 和 IM 提供的各个操作上的。
+5. IM：value search(key), insert(key, value)
+IM 提供了对索引的基本操作
+
 ## DM 解析：
 
 1. AbstractCache：引用计数法的缓存框架，留了两个从数据源获取数据和释放缓存的抽象方法给具体实现类去实现。
@@ -53,3 +67,29 @@ initPageOne() 和 启动时候进行校验：loadCheckPageOne()
 DM 层向上层提供了数据项（Data Item）的概念，VM 通过管理所有的数据项，向上层提供了记录（Entry）的概念。
 
 上层模块通过 VM 操作数据的最小单位，就是记录。VM 则在其内部，为每个记录，维护了多个版本（Version）。每当上层模块对某个记录进行修改时，VM 就会为这个记录创建一个新的版本。
+
+
+## read 语句的流程
+假设现在要执行 read * from student where id = 123456789 ，并且在 id 上已经建有索引，执行过程如下：
+1. TBM 接受语句，进行解析。
+2. TBM 调用 IM 的 search 方法，查找对应记录所在的地址。
+3. TBM 调用 VM 的 read 方法，并将地址作为参数，从VM中尝试读取记录内容。
+4. VM 通过 DM 的 read 方法，读取该条记录的最新版本。
+5. VM 检测该版本是否对该事务可见，其中需要 Visibility.isVisible() 方法。
+6. 如果可见，则返回该版本的数据。
+7. 如果不可见，则读取上一个版本，并重复 5,6,7 步骤。
+8. TBM 取得记录的二进制内容后，对其进行解析，还原出记录内容。
+9. TBM 将记录的内容返回给客户端。
+
+## insert 语句的流程
+假设现在要执行 insert into student values ("zhangsan", 123456789) 这条语句。
+执行过程如下：
+1. TBM 接收语句，并进行解析。
+2. TBM 将 values 的值，二进制化。
+3. TBM 利用 VM 的 insert 操作，将二进制化后的数据，插入到数据库。
+4. VM 为该条数据建立版本控制，并利用 DM 的 insert方法，将数据插入到数据库。
+5. DM将数据插入到数据库，并返回其被存储的地址。
+6. VM 将得到的地址，作为该条记录的 handler, 返回给 TBM。
+7. TBM 计算该条语句的 key，并将 handler 作为 data，并调用 IM 的 insert，建立索引。
+8. IM 利用 DM 提供的 read 和 insert 等操作，将 key 和 data 存入索引中。
+9. TBM 返回客户端插入成功的信息。
