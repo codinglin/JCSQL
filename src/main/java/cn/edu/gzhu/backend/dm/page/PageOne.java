@@ -8,7 +8,7 @@ import java.util.Arrays;
  * 特殊管理第一页
  * ValidCheck
  * db启动时给100~107字节处填入一个随机字节，db关闭时将其拷贝到108~115字节
- * 用于判断上一次数据库是否正常关闭
+ * 用于判断上一次数据库是否正常关闭，如果是异常关闭，就需要执行数据的恢复流程。
  */
 public class PageOne {
     private static final int OF_VC = 100;
