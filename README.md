@@ -1,8 +1,16 @@
 # JCSQL
-使用JAVA去仿写MySQL基本功能
+使用JAVA去仿写MySQL基本功能：
+* 数据的可靠性和数据恢复
+* 两段锁协议（2PL）实现可串行化调度
+* MVCC
+* 两种事务隔离级别（读提交和可重复读）
+* 死锁处理
+* 简单的表和字段管理
+* 简陋的 SQL 解析（因为懒得写词法分析和自动机，就弄得比较简陋）
+* 基于 socket 的 server 和 client
 
-后端划分为五个模块，分别为：
-
+## 后端划分为五个模块
+分别如下：
 1. Transaction Manager（TM）
 2. Data Manager（DM）
 3. Version Manager（VM）
@@ -68,6 +76,14 @@ DM 层向上层提供了数据项（Data Item）的概念，VM 通过管理所�
 
 上层模块通过 VM 操作数据的最小单位，就是记录。VM 则在其内部，为每个记录，维护了多个版本（Version）。每当上层模块对某个记录进行修改时，VM 就会为这个记录创建一个新的版本。
 
+## Transport:
+将SQL语句和错误数据一起打包成一个package，然后packager调用Transporter将这个package通过socket连接进行发送和接收。encoder的编解码主要就是对sql语句里面的异常进行封包和解包处理工作。
+
+## Server:
+从服务端的Launcher入口进去，新建数据库或者打开存在的数据库，这里就要开启前面的模块了（tm、dm、vm、tbm）； 然后开启Server，Server启动一个 ServerSocket 监听端口，当有请求到来时直接把请求丢给一个新线程HandleSocket处理。HandleSocket初始化一个Packager，循环接收来自客户端的数据并交给Executor处理，再将处理结果打包成Package通过Packager.send(packge)发送出去。Executor就是SQL语句执行的核心，调用 Parser 获取到对应语句的结构化信息对象，并根据对象的类型，调用 TBM 的不同方法进行处理。
+
+## Client：
+从客户端的Launcher入口进去，主要就是链接服务器，打开一个Shell类；shell类完成对用户输入的获取并调用client.execute()执行语句，还有关闭退出客户端功能。client就一个主要方法execute() ，接收 shell 发过来的sql语句，并打包成pkg进行单次收发操作roundTrip()，得到执行结果并返回；
 
 ## read 语句的流程
 假设现在要执行 read * from student where id = 123456789 ，并且在 id 上已经建有索引，执行过程如下：
@@ -93,3 +109,27 @@ DM 层向上层提供了数据项（Data Item）的概念，VM 通过管理所�
 7. TBM 计算该条语句的 key，并将 handler 作为 data，并调用 IM 的 insert，建立索引。
 8. IM 利用 DM 提供的 read 和 insert 等操作，将 key 和 data 存入索引中。
 9. TBM 返回客户端插入成功的信息。
+
+## 运行方式
+注意首先需要在 pom.xml 中调整编译版本，如果导入 IDE，请更改项目的编译版本以适应你的 JDK
+
+首先执行以下命令编译源码：
+
+```
+mvn compile
+```
+接着执行以下命令以 /tmp/mydb 作为路径创建数据库：
+
+```
+mvn exec:java -Dexec.mainClass="cn.edu.gzhu.server.Launcher" -Dexec.args="-create /tmp/mydb"
+```
+随后通过以下命令以默认参数启动数据库服务：
+```
+mvn exec:java -Dexec.mainClass="cn.edu.gzhu.server.Launcher" -Dexec.args="-open /tmp/mydb"
+```
+这时数据库服务就已经启动在本机的 9999 端口。重新启动一个终端，执行以下命令启动客户端连接数据库：
+
+```
+mvn exec:java -Dexec.mainClass="cn.edu.gzhu.client.Launcher"
+```
+会启动一个交互式命令行，就可以在这里输入类 SQL 语法，回车会发送语句到服务，并输出执行的结果。
