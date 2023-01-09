@@ -133,3 +133,7 @@ mvn exec:java -Dexec.mainClass="cn.edu.gzhu.server.Launcher" -Dexec.args="-open 
 mvn exec:java -Dexec.mainClass="cn.edu.gzhu.client.Launcher"
 ```
 会启动一个交互式命令行，就可以在这里输入类 SQL 语法，回车会发送语句到服务，并输出执行的结果。
+
+## 致谢
+代码参考于：
+https://github.com/CN-GuoZiyang/MYDB
