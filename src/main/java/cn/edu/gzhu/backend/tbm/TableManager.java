@@ -2,6 +2,8 @@ package cn.edu.gzhu.backend.tbm;
 
 import cn.edu.gzhu.backend.dm.DataManager;
 import cn.edu.gzhu.backend.parser.statement.*;
+import cn.edu.gzhu.backend.tbm.impl.TableManagerImpl;
+import cn.edu.gzhu.backend.utils.Parser;
 import cn.edu.gzhu.backend.vm.VersionManager;
 
 public interface TableManager {
@@ -17,6 +19,12 @@ public interface TableManager {
 
     public static TableManager create(String path, VersionManager vm, DataManager dm) {
         Booter booter = Booter.create(path);
-        return null;
+        booter.update(Parser.long2Byte(0));
+        return new TableManagerImpl(vm, dm, booter);
+    }
+
+    public static TableManager open(String path, VersionManager vm, DataManager dm) {
+        Booter booter = Booter.open(path);
+        return new TableManagerImpl(vm, dm, booter);
     }
 }

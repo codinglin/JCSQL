@@ -429,4 +429,5 @@ public class Parser {
     private static boolean isName(String name) {
         return !(name.length() == 1 && !Tokenizer.isAlphaBeta(name.getBytes()[0]));
     }
+
 }
