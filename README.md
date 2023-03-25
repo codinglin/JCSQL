@@ -27,17 +27,40 @@
 
 ## 各个模块提供的操作
 1. DM：insert(x), update(x), read(x).
-DM 提供针对数据项(DataItem)的基本插入，更新与读取操作，且这些操作是原子性的。DM会直接对数据库文件进行读写。
+  DM 提供针对数据项(DataItem)的基本插入，更新与读取操作，且这些操作是原子性的。DM会直接对数据库文件进行读写。
 2. TM：begin(T), commit(T), abort(T), isActive(T), isCommitted(T), isAborted(T)。
-TM 提供了针对事务的开始，提交，回滚操作，同时提供了对事务状态的查询操作。
+  TM 提供了针对事务的开始，提交，回滚操作，同时提供了对事务状态的查询操作。
 3. VM：insert(X), update(X), read(X), delete(X)。
-VM 提供了针对记录(Entry)的增删改查操作，VM在内部为每条记录维护多个版本，并根据不同的事务，返回不同的版本。
-VM 对这些实现，是建立在 DM 和 TM 的各个操作上的，还有一个事务可见性类 Visibility。
+  VM 提供了针对记录(Entry)的增删改查操作，VM在内部为每条记录维护多个版本，并根据不同的事务，返回不同的版本。
+  VM 对这些实现，是建立在 DM 和 TM 的各个操作上的，还有一个事务可见性类 Visibility。
 4. TBM：execute(statement)
-TBM 就是非常高层的模块，能直接执行用户输入的语句(statement)，然后进行执行。
-TBM 对语句的执行时建立在 VM 和 IM 提供的各个操作上的。
+  TBM 就是非常高层的模块，能直接执行用户输入的语句(statement)，然后进行执行。
+  TBM 对语句的执行时建立在 VM 和 IM 提供的各个操作上的。
 5. IM：value search(key), insert(key, value)
-IM 提供了对索引的基本操作
+  IM 提供了对索引的基本操作
+
+## TM 解析：
+
+TM 维护 XID 文件来维护事务的状态，并提供接口供其他模块来查询某个事务的状态。
+
+事务的 XID 从 1 开始标号，自增且不可重复。**特殊规定 XID 为 0 是一个超级事务**
+
+每个事务都有三种状态：
+
+1. active 正在进行, 尚未结束
+2. committed, 已提交
+3. aborted, 已撤销（回滚）
+
+```java
+// XID文件头长度
+public static final int LEN_XID_HEADER_LENGTH = 8;
+// 每个事务的占用长度
+private static final int XID_FIELD_SIZE = 1;
+```
+
+> XID 文件的头部，保存一个 8 字节的数字，记录这个 XID 文件管理的事务的个数
+>
+> 事务 xid 在文件中的状态就存储在 (xid - 1) + 8 字节处，xid - 1 是因为 xid 为 0 的超级事务的状态不需要记录，永远为 committed 状态
 
 ## DM 解析：
 
@@ -62,14 +85,182 @@ IM 提供了对索引的基本操作
 * 3）构建DM管理器；
 * 4）初始化校验页面1： dm.initPageOne()nnnDataManager的所有功能（主要功能就是CRUD，进行数据的读写修改都是靠DataItem进行操作的 ，所以PageX管理页面的时候FSO后面的DATA其实就是一个个的DataItem包）：
 1. 初始化校验页面1：
-initPageOne() 和 启动时候进行校验：loadCheckPageOne()
+  initPageOne() 和 启动时候进行校验：loadCheckPageOne()
 2. 读取数据 read(long uid)：
-从DataItem缓存中读取一个DataItem数据包并进行校验，如果DataItem缓存中没有就会调用 DataManager下的getForCache(long uid)从PageCache缓存中读取DataItem数据包并加入DataItem缓存（其实PageCache缓存和DataItem缓存都是共用的一个cache Map存的，只是key不一样，page的key是页号，DataItem的key是uid，页号+偏移量），如果PgeCache也没有就去数据库文件读取。
+  从DataItem缓存中读取一个DataItem数据包并进行校验，如果DataItem缓存中没有就会调用 DataManager下的getForCache(long uid)从PageCache缓存中读取DataItem数据包并加入DataItem缓存（其实PageCache缓存和DataItem缓存都是共用的一个cache Map存的，只是key不一样，page的key是页号，DataItem的key是uid，页号+偏移量），如果PgeCache也没有就去数据库文件读取。
 3. 插入数据 insert(long xid, byte[] data)：
-先把数据打包成DataItem格式，然后在 pageIndex 中获取一个足以存储插入内容的页面的页号； 获取页面后，需要先写入插入日志Recover.insertLog(xid, pg, raw)，接着才可以通过 pageX 在目标数据页插入数据PageX.insert(pg, raw)，并返回插入位置的偏移。如果在pageIndex中没有空闲空间足够插入数据了，就需要新建一个数据页pc.newPage(PageX.initRaw())。最后需要将页面信息重新插入 pageIndex。
+  先把数据打包成DataItem格式，然后在 pageIndex 中获取一个足以存储插入内容的页面的页号； 获取页面后，需要先写入插入日志Recover.insertLog(xid, pg, raw)，接着才可以通过 pageX 在目标数据页插入数据PageX.insert(pg, raw)，并返回插入位置的偏移。如果在pageIndex中没有空闲空间足够插入数据了，就需要新建一个数据页pc.newPage(PageX.initRaw())。最后需要将页面信息重新插入 pageIndex。
 4. 修改数据就是先读取数据，然后修改DataItem内容，再插入DataItem数据。但是在修改数据操作的前后需要调用DataItemImp.after()进行解写锁并记录更新日志，这里需要依赖DataManager里面的logDataItem(long xid, DataItem di)方法；
 5. 释放缓存：
-释放DataItem的缓存，实质上就是释放DataItem所在页的PageCache缓存
+  释放DataItem的缓存，实质上就是释放DataItem所在页的PageCache缓存
+
+**详细说明：**
+
+```java
+public class PageImpl implements Page {
+    private int pageNumber;
+    private byte[] data;
+    private boolean dirty;
+    private Lock lock;
+
+    private PageCache pc;
+}
+```
+
+pageNumber 是这个页面的页号，**该页号从 1 开始**。data 就是这个页实际包含的字节数据。dirty 标志着这个页面是否是脏页面，在缓存驱逐的时候，脏页面需要被写回磁盘。
+
+### 数据缓存页
+
+考虑到实现遍历，采用引用计数缓存框架
+
+`AbstractCache<T>` 是一个抽象类，内部有两个抽象方法，留给实现类去实现具体的操作：
+
+```java
+/**
+ * 当资源不在缓存时的获取行为
+ */
+protected abstract T getForCache(long key) throws Exception;
+/**
+ * 当资源被驱逐时的写回行为
+ */
+protected abstract void releaseForCache(T obj);
+```
+
+
+
+### 数据页管理
+
+#### 第一页
+
+我们设置数据页的第一页为校验页面，在每次数据库启动时，会生成一串随机字节，存储在 100 ~ 107 字节。在数据库正常关闭时，会将这串字节拷贝到第一页的 108 ~ 115 字节。这样数据库在每次启动时，检查第一页两处的字节是否相同，以此来判断上一次是否正常关闭。如果是异常关闭，就需要执行数据库的回复流程。
+
+#### 普通页
+
+一个普通页面以一个 2 字节无符号数起始，表示这一页的空闲位置的偏移，剩下的部分都是实际存储的数据。
+
+### 日志文件的读写
+
+日志的二进制文件，按照如下的格式进行排布：
+
+```
+[XChecksum][Log1][Log2][Log3]...[LogN][BadTail]
+```
+
+其中 XChecksum 是一个四字节的整数，是对后续所有日志计算的校验和。Log1 ~ LogN 是常规的日志数据，BadTail 是在数据库崩溃时，没有来得及写完的日志数据，这个 BadTail 不一定存在。
+
+每条日志的格式如下：
+
+```
+[Size][Checksum][Data]
+```
+
+其中，Size 是一个四字节整数，标识了 Data 段的字节数。Checksum 则是该条日志的校验和。
+
+单条日志的校验和，其实就是通过一个指定的种子实现的：
+
+```java
+private int calChecksum(int xCheck, byte[] log) {
+    for (byte b : log) {
+        xCheck = xCheck * SEED + b;
+    }
+    return xCheck;
+}
+```
+
+对所有日志求出校验和，求和就能得到日志文件的校验和 XChecksum。
+
+#### 实现Logger为迭代器模式
+
+实现 next() 方法，不断地从文件中读取下一条日志，并将其中的 Data 解析出来并返回。
+
+```java
+private byte[] internNext() {
+    if(position + OF_DATA >= fileSize) {
+        return null;
+    }
+    // 读取size
+    ByteBuffer tmp = ByteBuffer.allocate(4);
+    fc.position(position);
+    fc.read(tmp);
+    int size = Parser.parseInt(tmp.array());
+    if(position + size + OF_DATA > fileSize) {
+        return null;
+    }
+
+    // 读取checksum+data
+    ByteBuffer buf = ByteBuffer.allocate(OF_DATA + size);
+    fc.position(position);
+    fc.read(buf);
+    byte[] log = buf.array();
+
+    // 校验 checksum
+    int checkSum1 = calChecksum(0, Arrays.copyOfRange(log, OF_DATA, log.length));
+    int checkSum2 = Parser.parseInt(Arrays.copyOfRange(log, OF_CHECKSUM, OF_DATA));
+    if(checkSum1 != checkSum2) {
+        return null;
+    }
+    position += log.length;
+    return log;
+}
+```
+
+在打开一个日志文件时，需要**首先校验日志文件的 XChecksum**，并**移除文件尾部可能存在的 BadTail**，由于 BadTail 该条日志尚未写入完成，文件的校验和也就不会包含该日志的校验和，去掉 BadTail 即可保证日志文件的一致性。
+
+向日志文件写入日志时，也是首先将数据包裹成日志格式，写入文件后，再更新文件的校验和，更新校验和时，会刷新缓冲区，保证内容写入磁盘。
+
+```java
+public void log(byte[] data) {
+    byte[] log = wrapLog(data);
+    ByteBuffer buf = ByteBuffer.wrap(log);
+    lock.lock();
+    try {
+        fc.position(fc.size());
+        fc.write(buf);
+    } catch(IOException e) {
+        Panic.panic(e);
+    } finally {
+        lock.unlock();
+    }
+    updateXChecksum(log);
+}
+
+private void updateXChecksum(byte[] log) {
+    this.xChecksum = calChecksum(this.xChecksum, log);
+    fc.position(0);
+    fc.write(ByteBuffer.wrap(Parser.int2Byte(xChecksum)));
+    fc.force(false);
+}
+
+private byte[] wrapLog(byte[] data) {
+    byte[] checksum = Parser.int2Byte(calChecksum(0, data));
+    byte[] size = Parser.int2Byte(data.length);
+    return Bytes.concat(size, checksum, data);
+}
+```
+
+### 恢复策略
+
+DM 为上层模块，提供了两种操作，分别是插入新数据 (I) 和 更新现有数据 (U)。
+
+DM的日志策略是：
+
+**在进行 I 和 U 操作之前，必须先进行对应的日志操作，在保证日志写入磁盘后，才进行数据操作**
+
+这个日志策略，使得 DM 对于数据操作的磁盘同步，可以更加随意。日志在数据操作之前，保证到达了磁盘，那么即使该数据操作最后没有来得及同步到磁盘，数据库就发生了崩溃，后续也可以通过磁盘上的日志恢复该数据。
+
+对于两种数据操作，DM 记录的日志如下：
+
+* （Ti, I, A, X）：表示事务 Ti 在 A 位置插入一条数据 x
+* （Ti, U, A, oldx, newx）：表示事务 Ti 将 A 位置的数据，从 oldx 更新为 new x
+
+#### 单线程
+
+由于单线程，Ti、Tj、Tk 的日志永远不会相交。假设日志中最后一个事务是 Ti：
+
+1. 对 Ti 之前所有的事务日志进行重做 (redo)
+2. 接着检查 Ti 的状态（XID 文件），如果 Ti 的状态是已完成（包括 committed 和 aborted），就将 Ti 重做，否则进行撤销 (undo)
+
+
 
 ## VM 解析：
 DM 层向上层提供了数据项（Data Item）的概念，VM 通过管理所有的数据项，向上层提供了记录（Entry）的概念。
