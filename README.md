@@ -641,8 +641,6 @@ R1(X) // T1 读的 1
 
 T1 在第二次读取的时候，读到了已经提交的 T2 修改的值，导致了这个问题。于是我们可以规定：
 
-
-
 事务只能读取它开始时, 就已经结束的那些事务产生的数据版本
 
 这条规定，增加于，事务需要忽略：
@@ -722,6 +720,272 @@ private static boolean repeatableRead(TransactionManager tm, Transaction t, Entr
     return false;
 }
 ```
+
+### 版本跳跃问题
+
+根据可见性，每个事务只能看到其他 committed 的事务所产生的数据。aborted 事务产生的数据就不会对其他事务产生任何影响，也就相当于，这个事务不曾存在过。
+
+版本跳跃问题，考虑如下的情况，假设 X 最初只有 x0 版本，T1 和 T2 都是可重复读的隔离级别：
+
+```java
+T1 begin
+T2 begin
+R1(X) // T1读取x0
+R2(X) // T2读取x0
+U1(X) // T1将X更新到x1
+T1 commit
+U2(X) // T2将X更新到x2
+T2 commit
+```
+
+这种情况实际运行起来是没问题的，但是逻辑上不太正确。T1 将 X 从 x0 更新为了 x1，这是没错的。但是 T2 则是将 X 从 x0 更新成了 x2，跳过了 x1 版本。
+
+**读提交是允许版本跳跃的，而可重复读则是不允许版本跳跃的。**
+
+解决版本跳跃的思路：**如果 Ti 需要修改 X，而 X 已经被 Ti 不可见的事务 Tj 修改了，那么要求 Ti 回滚。**
+
+1. XID(Tj) > XID(Ti)
+2. Tj in SP(Ti)
+
+于是版本跳跃的检查也就很简单了，取出要修改的数据 X 的最新提交版本，并检查该最新版本的创建者对当前事务是否可见：
+
+```java
+public static boolean isVersionSkip(TransactionManager tm, Transaction t, Entry e) {
+    long xmax = e.getXmax();
+    if(t.level == 0) {
+        return false;
+    } else {
+        return tm.isCommitted(xmax) && (xmax > t.xid  t.isInSnapshot(xmax));
+  }
+}
+```
+
+### 死锁检测
+
+2PL 会阻塞事务，直至持有锁的线程释放锁。可以将这种等待关系抽象成有向边，例如 Tj 在等待 Ti，就可以表示为 Tj –> Ti。这样，无数有向边就可以形成一个图（不一定是连通图）。检测死锁也就简单了，只需要查看这个图中是否有环即可。
+
+使用LockTable对象，在内存中维护这张图。
+
+```java
+public class LockTable {
+
+    private Map<Long, List<Long>> x2u;  // 某个XID已经获得的资源的UID列表
+    private Map<Long, Long> u2x;        // UID被某个XID持有
+    private Map<Long, List<Long>> wait; // 正在等待UID的XID列表
+    private Map<Long, Lock> waitLock;   // 正在等待资源的XID的锁
+    private Map<Long, Long> waitU;      // XID正在等待的UID
+    private Lock lock;
+
+    ...
+}
+```
+
+在每次出现等待的情况时，就尝试向图中增加一条边，并进行死锁检测。如果检测到死锁，就撤销这条边，不允许添加，并撤销该事务。
+
+```java
+// 不需要等待则返回null，否则返回锁对象
+// 会造成死锁则抛出异常
+public Lock add(long xid, long uid) throws Exception {
+    lock.lock();
+    try {
+        if(isInList(x2u, xid, uid)) {
+            return null;
+        }
+        if(!u2x.containsKey(uid)) {
+            u2x.put(uid, xid);
+            putIntoList(x2u, xid, uid);
+            return null;
+        }
+        waitU.put(xid, uid);
+        putIntoList(wait, xid, uid);
+        if(hasDeadLock()) {
+            waitU.remove(xid);
+            removeFromList(wait, uid, xid);
+            throw Error.DeadlockException;
+        }
+        Lock l = new ReentrantLock();
+        l.lock();
+        waitLock.put(xid, l);
+        return l;
+    } finally {
+        lock.unlock();
+    }
+}
+```
+
+调用 add，如果需要等待的话，会返回一个上了锁的 Lock 对象。调用方在获取到该对象时，需要尝试获取该对象的锁，由此实现阻塞线程的目的，例如：
+
+```java
+Lock l = lt.add(xid, uid);
+if(l != null) {
+    l.lock();   // 阻塞在这一步
+    l.unlock();
+}
+```
+
+查找图中是否有环的算法也非常简单，就是一个深搜，只是需要注意这个图不一定是连通图。思路就是为每个节点设置一个访问戳，都初始化为 -1，随后遍历所有节点，以每个非 -1 的节点作为根进行深搜，并将深搜该连通图中遇到的所有节点都设置为同一个数字，不同的连通图数字不同。这样，如果在遍历某个图时，遇到了之前遍历过的节点，说明出现了环。
+
+## IM 解析：
+
+### 二叉树索引
+
+二叉树由一个个 Node 组成，每个 Node 都存储在一条 DataItem 中。结构如下：
+
+```
+[LeafFlag][KeyNumber][SiblingUid]
+[Son0][Key0][Son1][Key1]...[SonN][KeyN]
+```
+
+其中 LeafFlag 标记了该节点是否是个叶子节点；KeyNumber 为该节点中 key 的个数；SiblingUid 是其兄弟节点存储在 DM 中的 UID。后续是穿插的子节点（SonN）和 KeyN。最后的一个 KeyN 始终为 MAX_VALUE，以此方便查找。
+
+Node 类持有了其 B+ 树结构的引用，DataItem 的引用和 SubArray 的引用，用于方便快速修改数据和释放数据。
+
+```java
+public class Node {
+    BPlusTree tree;
+    DataItem dataItem;
+    SubArray raw;
+    long uid;
+    ...
+}
+```
+
+于是生成一个根节点的数据可以写成如下：
+
+```java
+static byte[] newRootRaw(long left, long right, long key)  {
+    SubArray raw = new SubArray(new byte[NODE_SIZE], 0, NODE_SIZE);
+    setRawIsLeaf(raw, false);
+    setRawNoKeys(raw, 2);
+    setRawSibling(raw, 0);
+    setRawKthSon(raw, left, 0);
+    setRawKthKey(raw, key, 0);
+    setRawKthSon(raw, right, 1);
+    setRawKthKey(raw, Long.MAX_VALUE, 1);
+    return raw.raw;
+}
+```
+
+## TBM 解析：
+
+### SQL 解析器
+
+Parser 实现了对类 SQL 语句的结构化解析，将语句中包含的信息封装为对应语句的类，这些类可见 top.guoziyang.mydb.backend.parser.statement 包。
+
+parser 包的 Tokenizer 类，对语句进行逐字节解析，根据空白符或者上述词法规则，将语句切割成多个 token。对外提供了 `peek()`、`pop()` 方法方便取出 Token 进行解析。切割的实现不赘述。
+
+Parser 类则直接对外提供了 `Parse(byte[] statement)` 方法，核心就是一个调用 Tokenizer 类分割 Token，并根据词法规则包装成具体的 Statement 类并返回。解析过程很简单，仅仅是根据第一个 Token 来区分语句类型，并分别处理，不再赘述。
+
+虽然根据编译原理，词法分析应当写一个自动机去做的，但是又不是不能用。
+
+### 字段与表管理
+
+管理表和字段的数据结构，例如表名、表字段信息和字段索引等。
+
+由于 TBM 基于 VM，单个字段信息和表信息都是直接保存在 Entry 中。字段的二进制表示如下：
+
+```java
+[FieldName][TypeName][IndexUid]
+```
+
+这里 FieldName 和 TypeName，以及后面的表明，存储的都是字节形式的字符串。这里规定一个字符串的存储方式，以明确其存储边界。
+
+```java
+[StringLength][StringData]
+```
+
+TypeName 为字段的类型，限定为 int32、int64 和 string 类型。如果这个字段有索引，那么 IndexUID 指向这个索引二叉树的根，否则该字段为0。
+
+根据这个结构，通过一个 UID 从 VM 中读取并解析如下：
+
+```java
+public static Field loadField(Table tb, long uid) {
+    byte[] raw = null;
+    try {
+        raw = ((TableManagerImpl)tb.tbm).vm.read(TransactionManagerImpl.SUPER_XID, uid);
+    } catch (Exception e) {
+        Panic.panic(e);
+    }
+    assert raw != null;
+    return new Field(uid, tb).parseSelf(raw);
+}
+
+private Field parseSelf(byte[] raw) {
+    int position = 0;
+    ParseStringRes res = Parser.parseString(raw);
+    fieldName = res.str;
+    position += res.next;
+    res = Parser.parseString(Arrays.copyOfRange(raw, position, raw.length));
+    fieldType = res.str;
+    position += res.next;
+    this.index = Parser.parseLong(Arrays.copyOfRange(raw, position, position+8));
+    if(index != 0) {
+        try {
+            bt = BPlusTree.load(index, ((TableManagerImpl)tb.tbm).dm);
+        } catch(Exception e) {
+            Panic.panic(e);
+        }
+    }
+    return this;
+}
+```
+
+创建一个字段的方法类似，将相关的信息通过 VM 持久化即可：
+
+```java
+private void persistSelf(long xid) throws Exception {
+    byte[] nameRaw = Parser.string2Byte(fieldName);
+    byte[] typeRaw = Parser.string2Byte(fieldType);
+    byte[] indexRaw = Parser.long2Byte(index);
+    this.uid = ((TableManagerImpl)tb.tbm).vm.insert(xid, Bytes.concat(nameRaw, typeRaw, indexRaw));
+}
+```
+
+一个数据库中存在多张表，TBM 使用链表的形式将其组织起来，每一张表都保存一个指向下一张表的 UID。表的二进制结构如下：
+
+```java
+[TableName][NextTable]
+[Field1Uid][Field2Uid]...[FieldNUid]
+```
+
+这里由于每个 Entry 中的数据，字节数是确定的，于是无需保存字段的个数。根据 UID 从 Entry 中读取表数据的过程和读取字段的过程类似。
+
+对表和字段的操作，有一个很重要的步骤，就是计算 Where 条件的范围，目前 MYDB 的 Where 只支持两个条件的与和或。例如有条件的 Delete，计算 Where，最终就需要获取到条件范围内所有的 UID。MYDB 只支持已索引字段作为 Where 的条件。计算 Where 的范围，具体可以查看 Table 的 `parseWhere()` 和 `calWhere()` 方法，以及 Field 类的 `calExp()` 方法。
+
+由于 TBM 的表管理，使用的是链表串起的 Table 结构，所以就必须保存一个链表的头节点，即第一个表的 UID，这样在 MYDB 启动时，才能快速找到表信息。
+
+MYDB 使用 Booter 类和 bt 文件，来管理 MYDB 的启动信息，虽然现在所需的启动信息，只有一个：头表的 UID。Booter 类对外提供了两个方法：load 和 update，并保证了其原子性。update 在修改 bt 文件内容时，没有直接对 bt 文件进行修改，而是首先将内容写入一个 bt_tmp 文件中，随后将这个文件重命名为 bt 文件。以期通过操作系统重命名文件的原子性，来保证操作的原子性。
+
+```java
+public void update(byte[] data) {
+    File tmp = new File(path + BOOTER_TMP_SUFFIX);
+    try {
+        tmp.createNewFile();
+    } catch (Exception e) {
+        Panic.panic(e);
+    }
+    if(!tmp.canRead()  !tmp.canWrite()) {
+        Panic.panic(Error.FileCannotRWException);
+    }
+    try(FileOutputStream out = new FileOutputStream(tmp)) {
+        out.write(data);
+        out.flush();
+    } catch(IOException e) {
+        Panic.panic(e);
+    }
+    try {
+        Files.move(tmp.toPath(), new File(path+BOOTER_SUFFIX).toPath(), StandardCopyOption.REPLACE_EXISTING);
+    } catch(IOException e) {
+        Panic.panic(e);
+    }
+    file = new File(path+BOOTER_SUFFIX);
+    if(!file.canRead()  !file.canWrite()) {
+        Panic.panic(Error.FileCannotRWException);
+    }
+}
+```
+
+
 
 ## Transport:
 
